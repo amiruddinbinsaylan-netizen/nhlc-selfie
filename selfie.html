@@ -49,6 +49,7 @@ h2{margin-bottom:6px;font-size:1.2rem}
     <div class="vwrap"><video id="video" autoplay playsinline muted></video><img id="shot" alt="Hasil foto" hidden></div>
     <p class="tip">Wajah dan jari harus terlihat jelas. Pastikan cahaya cukup.</p>
     <p class="status" id="status"></p>
+    <button class="btn ghost" id="btn-cam" type="button" hidden style="margin-bottom:10px">Aktifkan Kamera</button>
     <button class="btn" id="btn-snap" type="button" disabled>Ambil Foto</button>
     <div class="row" id="row-after" hidden>
       <button class="btn ghost" id="btn-retake" type="button">Ulangi</button>
@@ -99,13 +100,20 @@ h2{margin-bottom:6px;font-size:1.2rem}
     if (s <= 0) { clearInterval(timer); if (!sending) fail('Waktu habis. Kembali ke aplikasi NHLC dan tekan tombol absen lagi.'); }
   }
 
-  async function openCam() {
+    async function openCam() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('nodevice');
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    } catch (e) {
+      if (e && (e.name === 'OverconstrainedError' || e.name === 'NotFoundError')) {     // coba lagi dengan pengaturan paling sederhana
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      } else throw e;
+    }
     const v = $('video');
     v.srcObject = stream;
     v.onloadedmetadata = () => { $('btn-snap').disabled = false; };
     try { await v.play(); } catch (e) {}
+    $('status').textContent = ''; $('btn-cam').hidden = true;
   }
   function camMsg(e) {
     const n = e && e.name;
@@ -171,6 +179,24 @@ h2{margin-bottom:6px;font-size:1.2rem}
     fail((res && res.message) || 'Absen gagal dicatat.');
   }
 
+    function withTimeout(p, ms) {
+    return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ name: 'TimeoutError' }), ms))]);
+  }
+
+  async function tryCam() {
+    if (stream) return;
+    $('btn-cam').hidden = true;
+    $('status').textContent = 'Membuka kamera... Jika muncul pertanyaan izin, pilih Izinkan.';
+    try {
+      await withTimeout(openCam(), 15000);
+    } catch (e) {
+      if (stream) return;                                   // ternyata kamera sudah menyala
+      $('status').textContent = (e && e.name === 'TimeoutError')
+        ? 'Kamera belum merespons. Ketuk "Aktifkan Kamera", lalu pilih Izinkan jika diminta.' : camMsg(e);
+      $('btn-cam').hidden = false;
+    }
+  }
+
   async function start() {
     if (!ticket) return fail('Halaman ini harus dibuka dari tombol Absen di aplikasi NHLC.');
     if (API_URL.indexOf('https://') !== 0) return fail('Halaman kamera belum dikonfigurasi: isi API_URL di baris atas skrip dengan alamat web app (berakhiran /exec).');
@@ -183,11 +209,12 @@ h2{margin-bottom:6px;font-size:1.2rem}
     $('pose').textContent = info.pose;
     deadline = Date.now() + info.sisa * 1000;
     clearInterval(timer); timer = setInterval(tick, 1000); tick();
-    try { await openCam(); } catch (e) { return fail(camMsg(e)); }
     show('s-cam');
+    tryCam();                       // halaman langsung tampil; kamera dibuka sambil menunggu izin
   }
 
   $('btn-snap').addEventListener('click', snap);
+  $('btn-cam').addEventListener('click', tryCam);
   $('btn-retake').addEventListener('click', retake);
   $('btn-send').addEventListener('click', send);
   $('btn-close').addEventListener('click', () => {
